@@ -12,8 +12,7 @@ q = 33550337  # 2^{25} - 2^{12} + 1
 k = 131
 
 # Кольцо R = Z_q[x]/(x^n + 1)
-R = PolynomialRing(ZZ, 'x').quotient('x^{} + 1'.format(n), 'x')
-Rq = PolynomialRing(Zmod(q), 'x').quotient('x^{} + 1'.format(n), 'x')
+R = PolynomialRing(Zmod(q), 'x').quotient('x^{} + 1'.format(n), 'x')
 
 
 # Генерация случайного полинома из R с коэффициентами из [-d, d]
@@ -65,9 +64,9 @@ def Decode(K):
     return int(''.join(str(i) for i in t))
 
 
-def check_polynomial(f, B):
-    for c in f:
-        if not(-B <= c <= B):
+def check_polynomial(x, B):
+    for i in x:
+        if B < i < -B + q:
             return false
     return true
 
