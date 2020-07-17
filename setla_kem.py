@@ -1,7 +1,18 @@
 from sage.all import *
 from hashlib import sha512
 from random import getrandbits
+from random import choice
+from string import ascii_lowercase
+from time import time
+from pympler.asizeof import asizeof
 from Crypto.Cipher import AES
+
+# Параметры симметричной криптосистемы
+SYMMETRIC_KEY_LEN = 256
+
+# Размер тестовой выборки
+TEST_CASE_SIZE = 100
+TEST_MAX_MESSAGE_LEN = 1000000000
 
 # Парметры криптосистемы (стр. 15, таб. 1)
 n = 1024
@@ -12,11 +23,12 @@ B = 32768  # 2^{15}
 q = 33550337  # 2^{25} - 2^{12} + 1
 k = 131
 
-# Параметры симметричной криптосистемы
-SYMMETRIC_KEY_LEN = 256
-
 # Кольцо R = Z_q[x]/(x^n + 1)
 R = PolynomialRing(Zmod(q), 'x').quotient('x^{} + 1'.format(n), 'x')
+
+# Открытые общеизвестные показатели
+a1 = R.random_element()
+a2 = R.random_element()
 
 
 # Генерация случайного полинома из R с коэффициентами из [-d, d]
@@ -56,7 +68,10 @@ def encrypt(m, k):
 
 
 def decrypt(c, k):
-    return AES.new(k.to_bytes(SYMMETRIC_KEY_LEN // 8, byteorder='big'), AES.MODE_CFB, 16 * '\x00').decrypt(c).decode("utf-8")
+    try:
+        return AES.new(k.to_bytes(SYMMETRIC_KEY_LEN // 8, byteorder='big'), AES.MODE_CFB, 16 * '\x00').decrypt(c).decode("utf-8")
+    finally:
+        return ''
 
 
 def int_to_bits(x):
@@ -98,16 +113,19 @@ def check_polynomial(x, B):
 
 
 # Генерация пары ключей
-def SETLA_gen_key(a1, a2):
+def SETLA_Key_generation(a1, a2):
+    start_time = time()
     s = random_poly(1)
     e1 = random_poly(1)
     e2 = random_poly(1)
     t1 = a1 * s + e1
     t2 = a2 * s + e2
-    return [{'t1': t1, 't2': t2}, {'s': s, 'e1': e1, 'e2': e2}]
+    end_time = time()
+    return {'pk': {'t1': t1, 't2': t2}, 'sk': {'s': s, 'e1': e1, 'e2': e2}}, end_time - start_time
 
 
 def SETLA_KEM_Signcrypt(a1, a2, pkb, ska, pka, m):
+    start_time = time()
     K = getrandbits(SYMMETRIC_KEY_LEN)
     while True:
         y = random_poly(B)
@@ -122,28 +140,73 @@ def SETLA_KEM_Signcrypt(a1, a2, pkb, ska, pka, m):
     y0 = random_poly(B)
     x = pkb['t1'] * y + y0 + encode(K)  # t_{b, 1} * y + y' + Encode(K)
     eps = encrypt(m, K)
-    return {'z': z, 'c': c, 'x': x, 'eps': eps}
+    end_time = time()
+    return {'z': z, 'c': c, 'x': x, 'eps': eps}, end_time - start_time
 
 
 def SETLA_KEM_Unsigncrypt(a1, a2, skb, pkb, pka, C):
+    start_time = time()
     w1 = a1 * C['z'] - pka['t1'] * C['c']  # a_1 * z - t_{a, 1} * c
     w2 = a2 * C['z'] - pka['t2'] * C['c']  # a_2 * z - t_{a, 2} * c
     K = decode(C['x'] - w1 * skb['s'])
     m = decrypt(C['eps'], K)
+    result = ''
     if C['c'] == H((bits_modular_rounding(w1, d), bits_modular_rounding(w2, d), m,  K, pka, pkb))\
             and check_polynomial(C['z'], B - omega):
-        return m
-    else:
-        return ''
+        result = m
+    end_time = time()
+    return result, end_time - start_time
 
 
-message = 'hello'
+def test_key_generation():
+    average_time = 0.0
+    average_pk_size = 0
+    average_sk_size = 0
+    for i in range(TEST_CASE_SIZE):
+        keys, current_time = SETLA_Key_generation(a1, a2)
+        average_pk_size += asizeof(keys['pk'])
+        average_sk_size += asizeof(keys['sk'])
+        average_time += current_time
+    print("Average key generation time, s:", average_time / TEST_CASE_SIZE)
+    print("Average pk size, bytes:", average_pk_size / TEST_CASE_SIZE)
+    print("Average sk size, bytes:", average_sk_size / TEST_CASE_SIZE)
 
-a1 = R.random_element()
-a2 = R.random_element()
 
-pka, ska = SETLA_gen_key(a1, a2)
-pkb, skb = SETLA_gen_key(a1, a2)
+def random_word(length):
+    letters = ascii_lowercase
+    return ''.join(choice(letters) for i in range(length))
 
-C = SETLA_KEM_Signcrypt(a1, a2, pkb, ska, pka, message)
-print(SETLA_KEM_Unsigncrypt(a1, a2, skb, pkb, pka, C))
+
+def test_signcryption():
+    keys_a, null = SETLA_Key_generation(a1, a2)
+    keys_b, null = SETLA_Key_generation(a1, a2)
+    for message_length in range(100, TEST_MAX_MESSAGE_LEN, 100):
+        message = random_word(message_length)
+        average_time = 0.0
+        average_signcryptiontext_size = 0
+        for i in range(TEST_CASE_SIZE):
+            signcryptiontext, signcryption_time = SETLA_KEM_Signcrypt(a1, a2, keys_b['pk'], keys_a['sk'], keys_a['pk'], message)
+            average_time += signcryption_time
+            average_signcryptiontext_size += asizeof(signcryptiontext)
+        print("Message length, symbols:", message_length)
+        print("Average signcryption time, s:", average_time / TEST_CASE_SIZE)
+        print("Average signcryptiontext size, bytes:", average_signcryptiontext_size / TEST_CASE_SIZE)
+
+
+def test_unsigncryption():
+    keys_a, null = SETLA_Key_generation(a1, a2)
+    keys_b, null = SETLA_Key_generation(a1, a2)
+    for message_length in range(100, TEST_MAX_MESSAGE_LEN, 100):
+        message = random_word(message_length)
+        average_time = 0.0
+        for i in range(TEST_CASE_SIZE):
+            signcryptiontext, signcryption_time = SETLA_KEM_Signcrypt(a1, a2, keys_b['pk'], keys_a['sk'], keys_a['pk'], message)
+            null, unsigncryption_time = SETLA_KEM_Unsigncrypt(a1, a2, keys_b['sk'], keys_b['pk'], keys_a['pk'], signcryptiontext)
+            average_time += unsigncryption_time
+        print("Message length, symbols:", message_length)
+        print("Average signcryption time, s:", average_time / TEST_CASE_SIZE)
+
+
+test_key_generation()
+test_signcryption()
+test_unsigncryption()
